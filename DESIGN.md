@@ -6,10 +6,19 @@ This is a command line tool that takes the following input:
 - can listen to a set of CDC streams, e.g. PostgreSQL logical replication.
 - given the CDC events received it should look at the join criterias and figure out what dependent data in the other tables require reprocessing.
 
+# Technology choices
+
+- use python 3.14
+- use uv
+- use ruff
+- use postgresql 18.1
+- use the test_decoding postgresql plugin to do decoding of CDC events.
+
 # Design discussion
 
-We only care about customers that need reprocessing, and they need reprocessing if any dependent order line or product is inserted, updated or deleted. Join keys can be mutable so that must be taken into account (example: order lines can change their product ids).
+We only care about customers that need reprocessing, and they need reprocessing if any dependent order line or product is inserted, updated or deleted. Join keys can be mutable so that must be taken into account (example: order lines can change their product ids). Join keys can also be null as they may be optional.
 
+Consider if we have covered all variant of changes that can happen to these tables and if that correctly tracks the customers to be reprocessed.
 
 # Practical example
 
@@ -32,6 +41,15 @@ CREATE TABLE orders (
     FOREIGN KEY (cust_id) REFERENCES customers(_id)
 );
 
+-- Create products table
+CREATE TABLE products (
+    _id VARCHAR PRIMARY KEY,
+    name VARCHAR NOT NULL,
+    description VARCHAR,
+    price DECIMAL(10,2) NOT NULL,
+    _deleted BOOLEAN DEFAULT FALSE
+);
+
 -- Create order_lines table
 CREATE TABLE order_lines (
     _id VARCHAR PRIMARY KEY,
@@ -42,15 +60,6 @@ CREATE TABLE order_lines (
     _deleted BOOLEAN DEFAULT FALSE,
     FOREIGN KEY (order_id) REFERENCES orders(_id),
     FOREIGN KEY (product_id) REFERENCES products(_id)
-);
-
--- Create products table
-CREATE TABLE products (
-    _id VARCHAR PRIMARY KEY,
-    name VARCHAR NOT NULL,
-    description VARCHAR,
-    price DECIMAL(10,2) NOT NULL,
-    _deleted BOOLEAN DEFAULT FALSE
 );
 
 ## Example SQL query 

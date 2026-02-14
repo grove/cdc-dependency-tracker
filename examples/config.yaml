@@ -1,0 +1,56 @@
+database:
+  host: localhost
+  port: 5432
+  dbname: cdc-tracker
+  user: geir.gronmo
+  password: ""
+
+tracker:
+  base_table: customers
+  tracking_table: customers_to_reprocess
+  
+  # Adaptive routing thresholds
+  immediate_fanout_threshold: 100
+  
+  # Background percolation settings
+  percolation_interval_seconds: 30
+  percolation_batch_size: 1000
+  
+  sql_query: |
+    SELECT 
+        c._id as customer_id,
+        c.name as customer_name,
+        o._id as order_id,
+        ol._id as order_line_id,
+        p._id as product_id
+    FROM customers c
+    JOIN orders o ON c._id = o.cust_id
+    JOIN order_lines ol ON o._id = ol.order_id
+    JOIN products p ON ol.product_id = p._id
+    WHERE c._deleted = FALSE
+      AND o._deleted = FALSE
+      AND ol._deleted = FALSE
+      AND p._deleted = FALSE
+
+# Optional: PostgreSQL logical replication streaming
+# Uncomment to enable direct CDC streaming from database (requires setup)
+replication:
+  enabled: true
+  slot_name: cdc_slot
+  plugin: pgoutput  # Output plugin (uses PostgreSQL native pgoutput)
+  
+  # Replication connection (can be same as main database)
+  host: localhost
+  port: 5432
+  dbname: cdc-tracker
+  user: geir.gronmo
+  password: ""
+  
+  # Auto-creation settings (automatically creates slot and publication if missing)
+  auto_create_slot: true          # Create replication slot if it doesn't exist
+  auto_create_publication: true   # Create publication if it doesn't exist
+  publication_name: cdc_pub        # Name of the publication to use/create
+  
+  # Tuning parameters
+  ack_interval_seconds: 10  # How often to ACK processed messages
+  max_batch_size: 100       # Max messages before forcing ACK
