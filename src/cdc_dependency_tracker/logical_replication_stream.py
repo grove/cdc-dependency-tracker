@@ -2,24 +2,15 @@
 Logical replication stream wrapper for PostgreSQL.
 
 Provides a high-level interface for consuming CDC events from PostgreSQL
-logical replication using the custom pgoutput decoder.
+logical replication using the pgoutput-decoder library in a background thread.
 """
 
+import asyncio
 import logging
-import struct
-from typing import Iterator, Optional
-import psycopg2
-from psycopg2.extras import LogicalReplicationConnection
-
-from .pgoutput_decoder import (
-    PgOutputDecoder,
-    InsertMessage,
-    UpdateMessage,
-    DeleteMessage,
-    RelationMetadata,
-    BeginMessage,
-    CommitMessage
-)
+import threading
+import queue
+from typing import Iterator, Optional, Any
+import pgoutput_decoder
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +48,105 @@ class Column:
         return f"Column(name='{self.name}', value={self.value!r})"
 
 
+def _async_reader_thread(
+    message_queue: queue.Queue,
+    stop_event: threading.Event,
+    ready_event: threading.Event,
+    publication_name: str,
+    slot_name: str,
+    host: str,
+    database: str,
+    port: int,
+    user: str,
+    password: str
+):
+    """
+    Background thread that runs async pgoutput-decoder reader.
+    
+    Reads CDC messages from PostgreSQL and puts them in a queue
+    for synchronous consumption.
+    """
+    async def async_reader():
+        try:
+            cdc_reader = pgoutput_decoder.LogicalReplicationReader(
+                publication_name=publication_name,
+                slot_name=slot_name,
+                host=host,
+                database=database,
+                port=port,
+                user=user,
+                password=password,
+            )
+            
+            logger.info(f"Started async CDC reader for slot '{slot_name}', publication '{publication_name}'")
+            ready_event.set()  # Signal that we're ready
+            
+            async for message in cdc_reader:
+                if stop_event.is_set():
+                    break
+                
+                # Convert pgoutput-decoder message to DecodedMessage
+                decoded = _convert_message(message)
+                message_queue.put(decoded)
+                
+            await cdc_reader.stop()
+            
+        except Exception as e:
+            logger.error(f"Error in async CDC reader: {e}", exc_info=True)
+            message_queue.put(e)  # Put exception in queue
+            ready_event.set()  # Signal ready even on error
+    
+    # Create new event loop for this thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        loop.run_until_complete(async_reader())
+    finally:
+        loop.close()
+
+
+def _convert_message(msg) -> DecodedMessage:
+    """
+    Convert pgoutput-decoder message to DecodedMessage.
+    
+    Args:
+        msg: ReplicationMessage from pgoutput-decoder
+        
+    Returns:
+        DecodedMessage with compatible interface
+    """
+    # Map operation codes: "c" -> "I", "u" -> "U", "d" -> "D"
+    op_map = {"c": "I", "u": "U", "d": "D"}
+    op = op_map.get(msg.op, msg.op)
+    
+    table_name = msg.source.get("table", "")
+    table_schema = msg.source.get("schema", "public")
+    
+    # Convert after/before dicts to list of Column objects
+    new_tuple = []
+    if msg.after:
+        new_tuple = [Column(k, v) for k, v in msg.after.items()]
+    
+    old_tuple = []  
+    if msg.before:
+        old_tuple = [Column(k, v) for k, v in msg.before.items()]
+    
+    return DecodedMessage(
+        op=op,
+        table_name=table_name,
+        table_schema=table_schema,
+        new_tuple=new_tuple,
+        old_tuple=old_tuple
+    )
+
+
 class LogicalReplicationStream:
     """
     Manages PostgreSQL logical replication connection and message decoding.
     
-    Provides an iterator interface for consuming CDC events.
-    Compatible with pypgoutput.LogicalReplicationReader API.
+    Uses pgoutput-decoder library in a background thread with async event loop.
+    Provides a synchronous iterator interface for consuming CDC events.
     """
     
     def __init__(
@@ -87,7 +171,7 @@ class LogicalReplicationStream:
             port: Database port
             user: Database user
             password: Database password
-            options: Additional replication options
+            options: Additional replication options (unused, for compatibility)
         """
         self.publication_name = publication_name
         self.slot_name = slot_name
@@ -96,56 +180,56 @@ class LogicalReplicationStream:
         self.port = int(port)
         self.user = user
         self.password = password
-        self.options = options or {}
         
-        self.decoder = PgOutputDecoder()
-        self.conn: Optional[psycopg2.extensions.connection] = None
-        self.cursor: Optional[psycopg2.extensions.cursor] = None
+        self._message_queue: queue.Queue = queue.Queue(maxsize=1000)
+        self._stop_event = threading.Event()
+        self._ready_event = threading.Event()
+        self._reader_thread: Optional[threading.Thread] = None
         self._connected = False
         
     def connect(self):
-        """Establish logical replication connection."""
+        """Establish logical replication connection (no-op for compatibility)."""
+        pass
+        
+    def start_replication(self):
+        """Start consuming from the replication slot in background thread."""
         if self._connected:
             return
         
-        try:
-            self.conn = psycopg2.connect(
-                host=self.host,
-                port=self.port,
-                dbname=self.database,
-                user=self.user,
-                password=self.password,
-                connection_factory=LogicalReplicationConnection
-            )
-            self.cursor = self.conn.cursor()
-            self._connected = True
-            logger.info(f"Connected to replication slot '{self.slot_name}' with publication '{self.publication_name}'")
-        except Exception as e:
-            logger.error(f"Failed to connect for replication: {e}")
-            raise
-    
-    def start_replication(self):
-        """Start consuming from the replication slot."""
-        if not self._connected:
-            self.connect()
+        self._reader_thread = threading.Thread(
+            target=_async_reader_thread,
+            args=(
+                self._message_queue,
+                self._stop_event,
+                self._ready_event,
+                self.publication_name,
+                self.slot_name,
+                self.host,
+                self.database,
+                self.port,
+                self.user,
+                self.password
+            ),
+            daemon=True
+        )
+        self._reader_thread.start()
         
-        # Build options for pgoutput plugin
-        options = {
-            'proto_version': '1',
-            'publication_names': self.publication_name,
-        }
-        options.update(self.options)
+        # Wait for reader to be ready
+        if not self._ready_event.wait(timeout=10):
+            raise RuntimeError("CDC reader failed to start within 10 seconds")
         
+        # Check if there was an error during startup
         try:
-            self.cursor.start_replication(
-                slot_name=self.slot_name,
-                decode=False,  # We'll decode manually
-                options=options  # Pass as dict
-            )
-            logger.info(f"Started replication from slot '{self.slot_name}'")
-        except Exception as e:
-            logger.error(f"Failed to start replication: {e}", exc_info=True)
-            raise
+            item = self._message_queue.get(timeout=0.1)
+            if isinstance(item, Exception):
+                raise item
+            # Put it back if it's a valid message
+            self._message_queue.put(item)
+        except queue.Empty:
+            pass  # No error, continue
+        
+        self._connected = True
+        logger.info(f"Started replication from slot '{self.slot_name}'")
     
     def __iter__(self) -> Iterator[DecodedMessage]:
         """
@@ -158,134 +242,45 @@ class LogicalReplicationStream:
             self.start_replication()
         
         try:
-            # With decode=False, we need to use read_message() in a loop
-            # Use select() to implement timeout so thread can be interrupted
-            import select
-            
-            while True:
-                # Check if there's data available with timeout
-                if select.select([self.cursor], [], [], 0.1) == ([], [],  []):
+            while not self._stop_event.is_set():
+                try:
+                    # Get message from queue with timeout
+                    message = self._message_queue.get(timeout=0.1)
+                    
+                    # Check if it's an exception from the reader thread
+                    if isinstance(message, Exception):
+                        raise message
+                    
+                    yield message
+                    
+                except queue.Empty:
+                    # No message available, continue
                     continue
-                
-                msg = self.cursor.read_message()
-                
-                if msg is None:
-                    continue
-                
-                # msg.payload contains binary data
-                # msg.data_start contains LSN for acknowledgment
-                # msg.cursor is the cursor for sending feedback
-                
-                decoded = self.decoder.decode_message(msg.payload)
-                
-                if decoded is None:
-                    # Non-DML message (Begin, Commit, Relation, etc.)
-                    # We need Relation messages to build metadata cache
-                    # But we don't yield them
-                    pass
-                elif isinstance(decoded, InsertMessage):
-                    yield self._convert_insert(decoded)
-                elif isinstance(decoded, UpdateMessage):
-                    yield self._convert_update(decoded)
-                elif isinstance(decoded, DeleteMessage):
-                    yield self._convert_delete(decoded)
-                
-                # Send feedback to keep connection alive
-                msg.cursor.send_feedback(flush_lsn=msg.data_start)
-                
+                    
         except KeyboardInterrupt:
             logger.info("Replication interrupted")
+            self.stop()
             raise
         except Exception as e:
             logger.error(f"Error during replication: {e}", exc_info=True)
+            self.stop()
             raise
     
-    def _convert_insert(self, msg: InsertMessage) -> DecodedMessage:
-        """Convert InsertMessage to DecodedMessage."""
-        relation = self.decoder.get_relation_info(msg.relation_id)
-        if not relation:
-            raise ValueError(f"Unknown relation ID: {msg.relation_id}")
-        
-        # Convert dict to list of Column objects
-        new_tuple = [
-            Column(name, msg.tuple_data.columns.get(name))
-            for name in [col.name for col in relation.columns]
-        ]
-        
-        return DecodedMessage(
-            op='I',
-            table_name=relation.name,
-            table_schema=relation.namespace,
-            new_tuple=new_tuple,
-            old_tuple=[]
-        )
-    
-    def _convert_update(self, msg: UpdateMessage) -> DecodedMessage:
-        """Convert UpdateMessage to DecodedMessage."""
-        relation = self.decoder.get_relation_info(msg.relation_id)
-        if not relation:
-            raise ValueError(f"Unknown relation ID: {msg.relation_id}")
-        
-        # Convert new tuple
-        new_tuple = [
-            Column(name, msg.new_tuple_data.columns.get(name))
-            for name in [col.name for col in relation.columns]
-        ]
-        
-        # Convert old tuple if present
-        old_tuple = []
-        if msg.old_tuple_data:
-            old_tuple = [
-                Column(name, msg.old_tuple_data.columns.get(name))
-                for name in [col.name for col in relation.columns]
-            ]
-        
-        return DecodedMessage(
-            op='U',
-            table_name=relation.name,
-            table_schema=relation.namespace,
-            new_tuple=new_tuple,
-            old_tuple=old_tuple
-        )
-    
-    def _convert_delete(self, msg: DeleteMessage) -> DecodedMessage:
-        """Convert DeleteMessage to DecodedMessage."""
-        relation = self.decoder.get_relation_info(msg.relation_id)
-        if not relation:
-            raise ValueError(f"Unknown relation ID: {msg.relation_id}")
-        
-        # Convert old tuple
-        old_tuple = [
-            Column(name, msg.old_tuple_data.columns.get(name))
-            for name in [col.name for col in relation.columns]
-        ]
-        
-        return DecodedMessage(
-            op='D',
-            table_name=relation.name,
-            table_schema=relation.namespace,
-            new_tuple=[],
-            old_tuple=old_tuple
-        )
+    def stop(self):
+        """Stop the background reader thread."""
+        if self._connected:
+            logger.info("Stopping CDC reader thread...")
+            self._stop_event.set()
+            
+            if self._reader_thread and self._reader_thread.is_alive():
+                self._reader_thread.join(timeout=5)
+            
+            self._connected = False
+            logger.info("CDC reader stopped")
     
     def close(self):
-        """Close replication connection."""
-        if self.cursor:
-            try:
-                self.cursor.close()
-            except Exception:
-                pass
-            self.cursor = None
-        
-        if self.conn:
-            try:
-                self.conn.close()
-            except Exception:
-                pass
-            self.conn = None
-        
-        self._connected = False
-        logger.info("Closed replication connection")
+        """Close replication connection (alias for stop)."""
+        self.stop()
     
     def __enter__(self):
         """Context manager entry."""
