@@ -26,9 +26,8 @@ dependencies = [
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
-    "black>=23.12.0",
     "ruff>=0.1.9",
-    "mypy>=1.8.0",
+    "ty>=0.0.17",
     "testcontainers>=3.7.0",
 ]
 
@@ -39,22 +38,18 @@ cdc-percolator = "cdc_dependency_tracker.percolator_cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.black]
-line-length = 100
-target-version = ["py310"]
-
 [tool.ruff]
 line-length = 100
 target-version = "py310"
 
-[tool.mypy]
-python_version = "3.10"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
+[tool.ty.environment]
+python-version = "3.12"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "e2e: end-to-end integration tests that require Docker/testcontainers",
+]

@@ -84,7 +84,7 @@ Compared to pure Python CDC implementations:
 
 ```bash
 # 1. Install
-pip install -e .
+uv pip install -e .
 
 # 2. Configure
 cp examples/config.yaml config.yaml
@@ -119,10 +119,10 @@ git clone https://github.com/yourusername/cdc-dependency-tracker.git
 cd cdc-dependency-tracker
 
 # Install the package
-pip install -e .
+uv pip install -e .
 
-# For development (includes pytest, black, ruff, mypy, testcontainers)
-pip install -e ".[dev]"
+# For development (includes pytest, ruff, ty, testcontainers)
+uv pip install -e ".[dev]"
 ```
 
 ### Dependencies
@@ -370,12 +370,16 @@ pytest tests/ --cov=src/cdc_dependency_tracker --cov-report=term-missing
 pytest tests/test_e2e_customers_v2.py -v
 
 # Run E2E tests only (requires Docker)
-pytest tests/test_e2e_customers_v2.py -v --tb=short
+pytest tests/ -v --tb=short -m e2e
+
+# Run unit tests only (exclude E2E)
+pytest tests/ -v --tb=short -m "not e2e"
 ```
 
 **Test Coverage:**
 - **35 total tests** (9 E2E integration tests + 26 unit tests)
 - E2E tests use [testcontainers](https://testcontainers-python.readthedocs.io/) for ephemeral PostgreSQL instances
+- E2E tests pin Testcontainers image to `postgres:18.1-alpine`
 - Tests cover CDC streaming, dependency graph traversal, routing logic, and percolation
 - Function-scoped CDC fixtures ensure test isolation
 
@@ -383,16 +387,16 @@ pytest tests/test_e2e_customers_v2.py -v --tb=short
 
 ```bash
 # Format code
-black src/ tests/
+ruff format src/ tests/
 
 # Lint
 ruff check src/ tests/
 
 # Type check
-mypy src/
+ty check src/
 
 # Run all quality checks
-black src/ tests/ && ruff check src/ tests/ && mypy src/
+ruff format src/ tests/ && ruff check src/ tests/ && ty check src/
 ```
 
 ## Troubleshooting
@@ -410,7 +414,7 @@ black src/ tests/ && ruff check src/ tests/ && mypy src/
   rm -rf .venv
   python3.13 -m venv .venv
   source .venv/bin/activate
-  pip install -e ".[dev]"
+  uv pip install -e ".[dev]"
   ```
 
 ### CDC Streaming Issues
@@ -418,7 +422,7 @@ black src/ tests/ && ruff check src/ tests/ && mypy src/
 **Symptom:** "module 'pgoutput_decoder' has no attribute 'PgOutputDecoder'"
 
 **Solution:**
-- Ensure pgoutput-decoder is installed: `pip install pgoutput-decoder>=0.1.0`
+- Ensure pgoutput-decoder is installed: `uv pip install "pgoutput-decoder>=0.1.0"`
 - Verify installation: `python3 -c "import pgoutput_decoder; print(pgoutput_decoder.__version__)"`
 - Check that you're using the correct Python version (3.12 or 3.13)
 
@@ -488,7 +492,7 @@ Contributions welcome! Please:
 2. Create a feature branch
 3. Add tests for new functionality
 4. Ensure all tests pass: `pytest tests/ -v`
-5. Run code quality checks: `black src/ tests/ && ruff check src/ tests/`
+5. Run code quality checks: `ruff format src/ tests/ && ruff check src/ tests/`
 6. Submit a pull request
 
 ## Architecture Highlights

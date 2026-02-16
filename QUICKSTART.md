@@ -4,13 +4,13 @@
 
 - Python 3.10+
 - PostgreSQL database running
-- pip installed
+- uv installed
 
 ## Step 1: Install Dependencies
 
 ```bash
 cd cdc-dependency-tracker
-pip install -e .
+uv pip install -e .
 ```
 
 ## Step 2: Configure Database
@@ -101,7 +101,7 @@ FROM intermediate_to_track WHERE percolated = FALSE;
 
 ```bash
 # Install dev dependencies
-pip install -e ".[dev]"
+uv pip install -e ".[dev]"
 
 # Run tests
 pytest tests/ -v

@@ -13,10 +13,10 @@ def test_sql_parser_basic():
         JOIN orders o ON c._id = o.cust_id
         WHERE c._deleted = FALSE
     """
-    
+
     parser = SQLParser(sql)
     joins = parser.get_joins()
-    
+
     assert len(joins) > 0
     assert "customers" in parser.get_tables()
     assert "orders" in parser.get_tables()
@@ -36,12 +36,12 @@ def test_sql_parser_multi_join():
         JOIN products p ON ol.product_id = p._id
         WHERE c._deleted = FALSE
     """
-    
+
     parser = SQLParser(sql)
     joins = parser.get_joins()
     tables = parser.get_tables()
     join_graph = parser.get_join_graph()
-    
+
     assert len(joins) >= 3
     assert len(tables) == 4
     assert "customers" in join_graph
@@ -59,10 +59,10 @@ def test_extract_base_id_column_with_alias():
         FROM customers c
         JOIN orders o ON c._id = o.cust_id
     """
-    
+
     parser = SQLParser(sql, base_table="customers")
     base_id_column = parser.get_base_id_column()
-    
+
     assert base_id_column == "customer_id"
 
 
@@ -75,10 +75,10 @@ def test_extract_base_id_column_no_alias():
         FROM customers c
         JOIN orders o ON c._id = o.cust_id
     """
-    
+
     parser = SQLParser(sql, base_table="customers")
     base_id_column = parser.get_base_id_column()
-    
+
     assert base_id_column == "_id"
 
 
@@ -91,10 +91,10 @@ def test_extract_base_id_column_not_in_select():
         FROM orders o
         JOIN customers c ON c._id = o.cust_id
     """
-    
+
     parser = SQLParser(sql, base_table="customers")
     base_id_column = parser.get_base_id_column()
-    
+
     assert base_id_column is None
 
 
@@ -104,10 +104,10 @@ def test_extract_base_id_column_no_base_table():
         SELECT c._id as customer_id
         FROM customers c
     """
-    
+
     parser = SQLParser(sql)  # No base_table
     base_id_column = parser.get_base_id_column()
-    
+
     assert base_id_column is None
 
 
@@ -120,10 +120,10 @@ def test_extract_base_id_column_irregular_table_name():
         FROM people p
         JOIN addresses a ON p._id = a.person_id
     """
-    
+
     parser = SQLParser(sql, base_table="people")
     base_id_column = parser.get_base_id_column()
-    
+
     # Should extract "person_id" from SQL regardless of table name irregularity
     assert base_id_column == "person_id"
 
@@ -137,8 +137,8 @@ def test_extract_base_id_column_with_id_not_underscore_id():
         FROM users u
         JOIN sessions s ON u.id = s.user_id
     """
-    
+
     parser = SQLParser(sql, base_table="users")
     base_id_column = parser.get_base_id_column()
-    
+
     assert base_id_column == "user_id"

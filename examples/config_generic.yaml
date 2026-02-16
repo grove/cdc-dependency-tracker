@@ -1,0 +1,122 @@
+# Generic Configuration Template for CDC Dependency Tracker
+#
+# This template shows how to configure the CDC dependency tracker for ANY database schema.
+# Replace the placeholder values with your actual table names, columns, and join conditions.
+#
+# The tool automatically:
+# - Derives the ID column name from your base table (e.g., "users" → "user_id")
+# - Creates tracking tables based on your configuration
+# - Parses your SQL query to understand table relationships
+
+database:
+  host: localhost
+  port: 5432
+  dbname: your_database_name
+  user: your_username
+  password: your_password
+
+tracker:
+  # Base table: The primary entity you want to track changes for
+  # Example: "users", "accounts", "customers", "orders", etc.
+  base_table: your_base_table
+  
+  # Tracking table: Where to store IDs of base entities needing reprocessing
+  # Convention: "<base_table>_to_reprocess"
+  # Example: "users_to_reprocess", "accounts_to_reprocess", etc.
+  tracking_table: your_base_table_to_reprocess
+  
+  # Adaptive routing threshold: when to defer vs. process immediately
+  # Lower = more deferral (better for high throughput)
+  # Higher = more immediate processing (better for low latency)
+  immediate_fanout_threshold: 100
+  
+  # Background percolation settings
+  percolation_interval_seconds: 30  # How often to process deferred items
+  percolation_batch_size: 1000      # How many items to process per batch
+  
+  # SQL Query: Defines the JOIN relationships between tables
+  #
+  # REQUIRED:
+  # 1. SELECT the base table's ID with an alias (e.g., "u._id as user_id")
+  # 2. Include all dependent tables in JOINs
+  # 3. Use table aliases consistently
+  # 4. Add WHERE clauses for soft deletes if applicable
+  #
+  # The tool will:
+  # - Extract table relationships from JOINs
+  # - Build a dependency graph
+  # - Use this to route CDC events
+  #
+  # Example structure (replace with your schema):
+  sql_query: |
+    SELECT 
+        base._id as base_id,              -- Base table ID (REQUIRED)
+        dep1._id as dependent1_id,        -- Dependent table 1
+        dep2._id as dependent2_id,        -- Dependent table 2
+        dep3._id as dependent3_id         -- Dependent table 3 (optional)
+    FROM your_base_table base
+    JOIN dependent_table_1 dep1 ON base._id = dep1.base_id
+    JOIN dependent_table_2 dep2 ON dep1._id = dep2.dep1_id
+    LEFT JOIN dependent_table_3 dep3 ON dep2._id = dep3.dep2_id
+    WHERE base._deleted = FALSE           -- Optional: soft delete filter
+      AND dep1._deleted = FALSE
+      AND dep2._deleted = FALSE
+
+# Optional: PostgreSQL logical replication streaming
+# Enables direct CDC event streaming from database
+# Requires PostgreSQL 12+ with wal_level=logical
+replication:
+  enabled: false  # Set to true to enable CDC streaming
+  slot_name: cdc_slot
+  plugin: pgoutput  # PostgreSQL native plugin
+  
+  # Replication connection (can be same as main database)
+  host: localhost
+  port: 5432
+  dbname: your_database_name
+  user: your_username
+  password: your_password
+  
+  # Auto-creation: automatically creates slot and publication if missing
+  auto_create_slot: true
+  auto_create_publication: true
+  publication_name: cdc_pub
+  
+  # Tuning
+  ack_interval_seconds: 10
+  max_batch_size: 100
+
+---
+# REAL-WORLD EXAMPLE: E-commerce schema with customers
+#
+# This shows a concrete example for an e-commerce database:
+#
+# database:
+#   host: localhost
+#   port: 5432
+#   dbname: ecommerce
+#   user: app_user
+#   password: secret
+#
+# tracker:
+#   base_table: customers
+#   tracking_table: customers_to_reprocess
+#   immediate_fanout_threshold: 100
+#   percolation_interval_seconds: 30
+#   percolation_batch_size: 1000
+#   
+#   sql_query: |
+#     SELECT 
+#         c._id as customer_id,
+#         c.name as customer_name,
+#         o._id as order_id,
+#         ol._id as order_line_id,
+#         p._id as product_id
+#     FROM customers c
+#     JOIN orders o ON c._id = o.cust_id
+#     JOIN order_lines ol ON o._id = ol.order_id
+#     JOIN products p ON ol.product_id = p._id
+#     WHERE c._deleted = FALSE
+#       AND o._deleted = FALSE
+#       AND ol._deleted = FALSE
+#       AND p._deleted = FALSE
