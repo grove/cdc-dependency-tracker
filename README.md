@@ -2,7 +2,7 @@
 
 ![Python Version](https://img.shields.io/badge/python-3.12%2B-blue)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-12%2B-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 
 A Python tool for tracking database dependencies via Change Data Capture (CDC) events. Uses an adaptive hybrid strategy to efficiently propagate changes from dependent tables to a base table.
 
@@ -454,7 +454,17 @@ black src/ tests/ && ruff check src/ tests/ && mypy src/
 
 ## License
 
-MIT
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 ## Documentation
 
